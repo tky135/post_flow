@@ -1,0 +1,9 @@
+
+
+data:
+  pattern: cifar10
+  source: randn
+  target: cifar10
+
+
+model:
