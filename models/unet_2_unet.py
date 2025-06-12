@@ -549,7 +549,7 @@ class UNetModel(nn.Module):
     def process_t(self, t, x):
         timesteps = t
         while timesteps.dim() > 1:
-            print(timesteps.shape)
+            # print(timesteps.shape)
             timesteps = timesteps[:, 0]
         if timesteps.dim() == 0:
             timesteps = timesteps.repeat(x.shape[0])
@@ -668,6 +668,10 @@ class UNetModelWrapper(UNetModel):
             use_new_attention_order=use_new_attention_order,
         )
 
-    def forward(self, t_v, v, t, xt, y=None, *args, **kwargs):
+    def forward(self, x, t, y=None, *args, **kwargs):
+        t_v = t[:, 1]
+        t = t[:, 0]
+        v = x[:, 1]
+        xt = x[:, 0]
         return super().forward(t_v, v, t, xt, y=y)
 

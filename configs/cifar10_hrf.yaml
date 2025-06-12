@@ -23,12 +23,13 @@ data:
 model:
   method:
     type:
-      rectified_flow.rectified_flow.RectifiedFlow
+      rectified_flow.rectified_flow.HRF
     args:
       interp: "straight"
+      depth: 2
   net:
     type:
-      models.unet.UNetModelWrapper
+      models.unet_2_unet.UNetModelWrapper
     args:
       dim: ${data_shape}
       num_res_blocks: 2

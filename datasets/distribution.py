@@ -99,7 +99,7 @@ class EightGaussians2D(Distribution):
         return self.target_model.sample([batch_size])
 
 class Moon(Distribution):
-    def __init__(self, size=100000):
+    def __init__(self, size=1000000):
         self.data_shape = (2,)
         n_samples_out = size // 2
         n_samples_in = size - n_samples_out

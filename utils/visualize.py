@@ -1,300 +1,231 @@
-import numpy as np
 import torch
+import numpy as np
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
-
-def visualize_distribution_evolution(
+def build_normalized_histogram_fig(
     data_tensor: torch.Tensor,
-    save_path: str,
-    num_bins: int = 30,
-    title: str = "Distribution Evolution Over Time",
-    x_range: tuple = None,
-    y_range: tuple = None,
-    alpha: float = 0.7,
-    color: str = "#1E90FF",
-    auto_open: bool = False,
-    include_plotlyjs: str = 'cdn'
+    num_bins: int = 100,
+    title: str = "Distribution Evolution (Area=1)",
+    x_range: tuple[float, float] = None,
 ):
     """
-    Visualize the evolution of a distribution over time as an animated histogram.
-    
-    Parameters:
-    -----------
-    data_tensor : torch.Tensor
-        Tensor of shape [T, N] where T is timesteps and N is samples per timestep
-    save_path : str
-        Path where to save the HTML file (e.g., "output/animation.html")
-    num_bins : int
-        Number of histogram bins
-    title : str
-        Title of the visualization
-    x_range : tuple
-        Fixed x-axis range (min, max). If None, auto-scale based on data
-    y_range : tuple
-        Fixed y-axis range (min, max). If None, auto-scale based on data
-    alpha : float
-        Opacity of histogram bars (0-1)
-    color : str
-        Color of histogram bars (hex color or color name)
-    auto_open : bool
-        Whether to automatically open the HTML file in browser
-    include_plotlyjs : str
-        'cdn' for online viewing, 'inline' for offline viewing
-    
-    Returns:
-    --------
-    str : Path where the HTML file was saved
+    Animated histogram where each frame’s bars integrate to 1.
     """
-    
-    # Convert tensor to numpy
-    data_np = data_tensor.detach().cpu().numpy()
-    T, N = data_np.shape
-    
-    # Find global min/max for consistent binning
-    global_min = np.min(data_np)
-    global_max = np.max(data_np)
-    
-    # Set x_range if not provided
-    if x_range is None:
-        padding = 0.1 * (global_max - global_min)
-        x_range = (global_min - padding, global_max + padding)
-    
-    # Create bins
-    bin_edges = np.linspace(x_range[0], x_range[1], num_bins + 1)
-    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
-    bin_width = bin_edges[1] - bin_edges[0]
-    
-    # Calculate histograms for all time steps
-    histograms = []
-    max_density = 0
-    
-    for t in range(T):
-        counts, _ = np.histogram(data_np[t], bins=bin_edges, density=True)
-        histograms.append(counts)
-        max_density = max(max_density, np.max(counts))
-    
-    # Set y_range if not provided
-    if y_range is None:
-        y_range = (0, max_density * 1.1)
-    
-    # Create figure
-    fig = go.Figure()
-    
-    # Add initial histogram (t=0)
-    fig.add_trace(
-        go.Bar(
-            x=bin_centers,
-            y=histograms[0],
-            name="Distribution",
-            width=bin_width,
-            marker_color=color,
-            opacity=alpha,
-            hovertemplate='Value: %{x:.3f}<br>Density: %{y:.3f}<extra></extra>'
-        )
+    data_array = data_tensor.detach().cpu().numpy()
+    T, N = data_array.shape
+
+    # decide fixed x‐range
+    if x_range is not None:
+        mn, mx = x_range
+    else:
+        mn, mx = data_array.min(), data_array.max()
+
+    bins = np.linspace(mn, mx, num_bins + 1)
+    centers = (bins[:-1] + bins[1:]) / 2
+    width = bins[1] - bins[0]
+
+    # compute per‐frame densities (so ∑ density * bin_width = 1)
+    hists = [np.histogram(data_array[t], bins=bins, density=True)[0]
+             for t in range(T)]
+
+    # find the tallest bin across all frames for y‐axis limits
+    max_density = max(h.max() for h in hists)
+
+    # build the plotly figure and frames
+    fig = go.Figure([go.Bar(x=centers, y=hists[0], width=width, opacity=0.8)])
+    fig.frames = [
+        go.Frame(data=[go.Bar(x=centers, y=hists[t], width=width)], name=str(t))
+        for t in range(T)
+    ]
+
+    fig.update_layout(
+        title=dict(text=title, x=0.5),
+        xaxis=dict(title="Value", range=[mn, mx]),
+        yaxis=dict(title="Density", range=[0, max_density]),
+        updatemenus=[dict(
+            type="buttons", showactive=False, y=1.05,
+            buttons=[dict(label="► Play", method="animate", args=[
+                None,
+                {
+                    "frame": {"duration": 30, "redraw": False},
+                    "transition": {"duration": 0},
+                    "fromcurrent": True,
+                    "mode": "immediate",
+                }
+            ])]
+        )],
+        sliders=[dict(
+            pad={"t": 50},
+            steps=[dict(method="animate",
+                        args=[[str(t)], dict(mode="immediate")],
+                        label=str(t)) for t in range(T)]
+        )]
     )
-    
-    # Create frames for animation
+    return fig
+
+def build_1d_trajectory_fig(
+    trajs: dict[str, list[torch.Tensor]],
+    D1_gt_samples: torch.Tensor = None,
+    num_particles: int = 20,
+    title: str = "1D Trajectories",
+    x_range: tuple[float, float] = None,
+):
+    """
+    trajs[name] = list of T tensors of shape [P,1].
+    D1_gt_samples: optional tensor [M,1], plotted at y=1.
+    x_range: optional (min, max) to fix the x-axis range.
+    """
+    T = max(len(L) for L in trajs.values())
+
+    # collect global x-values
+    all_x = []
+    for L in trajs.values():
+        for t in L:
+            all_x.append(t.detach().cpu().numpy().ravel())
+    if D1_gt_samples is not None:
+        all_x.append(D1_gt_samples.detach().cpu().numpy().ravel())
+    all_x = np.hstack(all_x)
+
+    # Use explicit range if given, else compute from data
+    if x_range is not None:
+        mn, mx = x_range
+    else:
+        mn, mx = all_x.min(), all_x.max()
+
+    fig = go.Figure()
+
+    # static lines (particles over time)
+    for L in trajs.values():
+        stacked = np.stack([t.detach().cpu().numpy().ravel() for t in L])  # [T,P]
+        P = stacked.shape[1]
+        for i in range(min(num_particles, P)):
+            fig.add_trace(go.Scatter(
+                x=stacked[:, i],
+                y=np.linspace(0, 1, T),
+                mode="lines", line=dict(width=1),
+                opacity=0.3, showlegend=False
+            ))
+
+    # ground-truth at y=1
+    if D1_gt_samples is not None:
+        gt = D1_gt_samples.detach().cpu().numpy().ravel()
+        fig.add_trace(go.Scatter(
+            x=gt, y=np.ones_like(gt),
+            mode="markers", marker=dict(symbol="x", size=6),
+            name="GT", showlegend=True
+        ))
+
+    # initial particles at y=0
+    for name, L in trajs.items():
+        x0 = L[0].detach().cpu().numpy().ravel()
+        fig.add_trace(go.Scatter(
+            x=x0, y=np.zeros_like(x0),
+            mode="markers", marker=dict(size=6),
+            name=name
+        ))
+
+    # animated markers
     frames = []
     for t in range(T):
-        frame = go.Frame(
-            data=[
-                go.Bar(
-                    x=bin_centers,
-                    y=histograms[t],
-                    width=bin_width,
-                    marker_color=color,
-                    opacity=alpha,
-                    hovertemplate='Value: %{x:.3f}<br>Density: %{y:.3f}<extra></extra>'
-                )
-            ],
-            name=str(t),
-            traces=[0]
-        )
-        frames.append(frame)
-    
-    # Create slider steps
-    slider_steps = []
-    for t in range(T):
-        step = dict(
-            method="animate",
-            args=[
-                [str(t)],
-                dict(
-                    mode="immediate",
-                    frame=dict(duration=0, redraw=True),
-                    transition=dict(duration=0),
-                )
-            ],
-            label=f"t={t}"
-        )
-        slider_steps.append(step)
-    
-    # Create slider
-    sliders = [
-        dict(
-            active=0,
-            currentvalue=dict(
-                prefix="Time Step: ",
-                visible=True,
-                xanchor="right"
-            ),
-            pad=dict(b=10, t=50),
-            len=0.9,
-            x=0.1,
-            xanchor="left",
-            y=0,
-            yanchor="top",
-            steps=slider_steps
-        )
-    ]
-    
-    # Update layout
-    fig.update_layout(
-        title=dict(
-            text=title,
-            x=0.5,
-            xanchor="center",
-            font=dict(size=20)
-        ),
-        xaxis=dict(
-            title="Value",
-            range=x_range,
-            showgrid=True,
-            gridcolor='lightgray',
-            zeroline=True,
-            zerolinecolor='gray',
-            zerolinewidth=1
-        ),
-        yaxis=dict(
-            title="Density",
-            range=y_range,
-            showgrid=True,
-            gridcolor='lightgray'
-        ),
-        sliders=sliders,
-        updatemenus=[
-            dict(
-                type="buttons",
-                showactive=False,
-                x=0.1,
-                xanchor="right",
-                y=0.02,
-                yanchor="bottom",
-                pad=dict(t=0, r=10),
-                buttons=[
-                    dict(
-                        label="Play",
-                        method="animate",
-                        args=[
-                            None,
-                            dict(
-                                frame=dict(duration=500, redraw=True),
-                                transition=dict(duration=300),
-                                fromcurrent=True,
-                                mode="immediate"
-                            )
-                        ]
-                    ),
-                    dict(
-                        label="Pause",
-                        method="animate",
-                        args=[
-                            [None],
-                            dict(
-                                frame=dict(duration=0, redraw=False),
-                                mode="immediate",
-                                transition=dict(duration=0)
-                            )
-                        ]
-                    )
-                ]
-            )
-        ],
-        margin=dict(l=80, r=80, t=100, b=100),
-        height=600,
-        width=900,
-        template="plotly_white",
-        showlegend=False
-    )
-    
-    # Add frames to figure
+        pts = []
+        for L in trajs.values():
+            if t < len(L):
+                x = L[t].detach().cpu().numpy().ravel()
+                y = np.full_like(x, t / (len(L) - 1))
+                pts.append(go.Scatter(
+                    x=x, y=y, mode="markers", marker=dict(size=6), opacity=0.8
+                ))
+        frames.append(go.Frame(data=pts, name=str(t)))
     fig.frames = frames
-    
-    # Add annotation with statistics
-    stats_text = f"Samples per timestep: {N}<br>Total timesteps: {T}"
-    fig.add_annotation(
-        text=stats_text,
-        xref="paper", yref="paper",
-        x=0.98, y=0.98,
-        xanchor="right", yanchor="top",
-        showarrow=False,
-        bordercolor="gray",
-        borderwidth=1,
-        borderpad=4,
-        bgcolor="white",
-        opacity=0.8,
-        font=dict(size=12)
-    )
-    
-    # Save to HTML
-    fig.write_html(
-        save_path,
-        auto_open=auto_open,
-        include_plotlyjs=include_plotlyjs,
-        config={
-            'displayModeBar': True,
-            'displaylogo': False,
-            'modeBarButtonsToRemove': ['pan2d', 'lasso2d', 'select2d'],
-            'toImageButtonOptions': {
-                'format': 'png',
-                'filename': 'distribution_frame',
-                'height': 600,
-                'width': 900,
-                'scale': 2
-            }
-        }
-    )
-    
-    print(f"Animation saved to: {save_path}")
-    return save_path
 
+    fig.update_layout(
+        title=dict(text=title, x=0.5),
+        xaxis=dict(title="Value", range=[mn, mx]),
+        yaxis=dict(title="Level", range=[0, 1]),
+        updatemenus=[dict(
+            type="buttons", showactive=False, y=-0.1,
+            buttons=[dict(label="► Play", method="animate", args=[
+                None,
+                {
+                    "frame": {"duration": 30, "redraw": False},
+                    "transition": {"duration": 0},
+                    "fromcurrent": True,
+                    "mode": "immediate",
+                }
+            ])]
+        )],
+        sliders=[dict(
+            pad={"t": 20},
+            steps=[dict(method="animate",
+                        args=[[str(t)], dict(mode="immediate")],
+                        label=str(t)) for t in range(T)]
+        )]
+    )
+    return fig
 
-# Example usage
-if __name__ == "__main__":
-    # Create example data: normal distribution shifting mean over time
-    T = 30  # timesteps
-    N = 1000  # samples per timestep
-    
-    # Generate synthetic data
-    data_list = []
-    for t in range(T):
-        # Mean shifts from -2 to 2 over time
-        mean = -2 + (4 * t / (T - 1))
-        # Generate samples from normal distribution
-        samples = torch.randn(N) + mean
-        data_list.append(samples)
-    
-    # Stack into tensor of shape [T, N]
-    data_tensor = torch.stack(data_list)
-    
-    # Visualize and save
-    output_path = visualize_distribution_evolution(
-        data_tensor=data_tensor,
-        save_path="distribution_animation.html",
-        num_bins=40,
-        title="Normal Distribution with Shifting Mean",
-        color="#FF6B6B",
-        alpha=0.8
+def visualize_combined(
+    data_tensor: torch.Tensor,
+    trajs: dict[str, list[torch.Tensor]],
+    D1_gt_samples: torch.Tensor = None,
+    save_path: str = "combined.html",
+    x_range: tuple[float, float] = None,
+):
+    """
+    Vertically stacks the normalized-histogram and 1D-trajectory animations.
+    x_range: optional (min, max) to apply to both subplots.
+    """
+    # Pass the same x_range into both builders
+    fh = build_normalized_histogram_fig(data_tensor, x_range=x_range)
+    ft = build_1d_trajectory_fig(trajs, D1_gt_samples, x_range=x_range)
+
+    combined = make_subplots(
+        rows=2, cols=1, vertical_spacing=0.12,
+        subplot_titles=("Normalized Histogram", "1D Trajectories")
     )
-    
-    # Example with custom range
-    output_path2 = visualize_distribution_evolution(
-        data_tensor=data_tensor,
-        save_path="distribution_fixed_range.html",
-        num_bins=50,
-        title="Distribution Evolution (Fixed Range)",
-        x_range=(-5, 5),
-        y_range=(0, 0.5),
-        color="#4ECDC4",
-        include_plotlyjs='inline'  # For offline viewing
+    # add all static traces
+    for tr in fh.data:
+        combined.add_trace(tr, row=1, col=1)
+    for tr in ft.data:
+        combined.add_trace(tr, row=2, col=1)
+
+    # merge frames
+    frames = []
+    for t in range(len(fh.frames)):
+        frames.append(go.Frame(
+            data=fh.frames[t].data + ft.frames[t].data,
+            name=str(t)
+        ))
+    combined.frames = frames
+
+    # enforce the same x_range on both panels
+    mn, mx = x_range if x_range is not None else fh.layout.xaxis.range
+    combined.update_xaxes(range=[mn, mx], row=1, col=1)
+    combined.update_xaxes(range=[mn, mx], row=2, col=1)
+    # y-ranges are fixed
+    # combined.update_yaxes(range=[0, 1], row=1, col=1, title_text="Density")
+    combined.update_yaxes(range=[0, 1], row=2, col=1, title_text="Level")
+
+    combined.update_layout(
+        height=650, width=600,
+        updatemenus=[dict(type="buttons", showactive=False,
+            buttons=[dict(label="► Play", method="animate", args=[
+                None,
+                {
+                    "frame": {"duration": 30, "redraw": False},
+                    "transition": {"duration": 0},
+                    "fromcurrent": True,
+                    "mode": "immediate",
+                }
+            ])]
+        )],
+        sliders=[dict(
+            pad={"t": 40},
+            steps=[dict(method="animate",
+                        args=[[str(t)], dict(mode="immediate")],
+                        label=str(t)) for t in range(len(fh.frames))]
+        )]
     )
+
+    combined.write_html(save_path, include_plotlyjs="cdn")
+    print(f"Saved animation to {save_path}")

@@ -104,6 +104,7 @@ class GMFlowMLP2DDenoiser(nn.Module):
     def __init__(
             self,
             num_gaussians=32,
+            data_shape=(2,),
             pos_min_period=5e-3,
             pos_max_period=50,
             embed_dim=256,
@@ -113,12 +114,13 @@ class GMFlowMLP2DDenoiser(nn.Module):
         super().__init__()
         self.num_gaussians = num_gaussians
         self.constant_logstd = constant_logstd
+        self.data_dim = data_shape[0]
         
 
 
         hidden_dim = 128 * 3
-        self.vnetd = VNetD(data_dim=2, depth=1, hidden_num=hidden_dim)
-        self.out_means = nn.Linear(hidden_dim, num_gaussians * 2)
+        self.vnetd = VNetD(data_dim=data_shape[0], depth=1, hidden_num=hidden_dim)
+        self.out_means = nn.Linear(hidden_dim, num_gaussians * self.data_dim)
         self.out_logweights = nn.Linear(hidden_dim, num_gaussians)
         if constant_logstd is None:
             self.out_logstds = nn.Linear(hidden_dim, 1)
@@ -154,7 +156,8 @@ class GMFlowMLP2DDenoiser(nn.Module):
         feat = self.vnetd.fc2(feat)
         feat = self.vnetd.act(feat)
 
-        means = self.out_means(feat).reshape(bs, self.num_gaussians, 2, *extra_dims)
+
+        means = self.out_means(feat).reshape(bs, self.num_gaussians, self.data_dim, *extra_dims)
         logweights = self.out_logweights(feat).log_softmax(dim=-1).reshape(bs, self.num_gaussians, 1, *extra_dims)
         if self.constant_logstd is None:
             logstds = self.out_logstds(feat).reshape(bs, 1, 1, *extra_dims)

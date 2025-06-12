@@ -69,7 +69,7 @@ model:
 # model:
 #   method:
 #     type:
-#       models.unet.UNetModelWrapper
+#       rectified_flow.rectified_flow.GMFlow
 #     args:
 #       interp: "straight"
 #   net:
@@ -77,3 +77,5 @@ model:
 #       models.toy_mlp.GMFlowMLP2DDenoiser
 #     args:
 #       num_gaussians: 64
+#       data_shape: ${data_shape}
+

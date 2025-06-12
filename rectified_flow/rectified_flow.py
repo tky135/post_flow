@@ -601,6 +601,8 @@ class ScoringRule(RectifiedFlow):
             velocity (`torch.Tensor`):
                 The velocity tensor `v_t`, with the same shape as `x_t` (`B, D_1, D_2, ..., D_n)`).
         """
+        if t == 1.0:
+            return torch.zeros_like(x_t, device=self.device, dtype=self.dtype)
         
         t = self.match_dim_with_data(t, x_t.shape, expand_dim=False).unsqueeze(-1)
         xi = self.xi_distribution.sample((x_t.shape[0],))
@@ -769,6 +771,8 @@ class GMFlow(RectifiedFlow):
             velocity (`torch.Tensor`):
                 The velocity tensor `v_t`, with the same shape as `x_t` (`B, D_1, D_2, ..., D_n)`).
         """
+        if t == 1.0:
+            return torch.zeros_like(x_t, device=self.device, dtype=self.dtype)
         t = self.match_dim_with_data(t, x_t.shape, expand_dim=False)
         t = t * self.T_SCALE
         
@@ -839,7 +843,7 @@ class HRF(RectifiedFlow):
         x_0 = torch.cat([x_0[:,None,:], torch.randn((x_0.shape[0], self.depth - 1) + x_0.shape[1:], device=self.device)], dim=1)   # N x D x d
         t = torch.rand((x_1.shape[0], self.depth)+(1,)*(x_1.dim()-1), device=self.device)
         x_t = (1-t)*x_0 + t*(x_1[:,None,...] - torch.einsum('ij,bj...->bi...', self.A, x_0))
-        pred = self.velocity_field(x_t, t.squeeze(2))
+        # pred = self.velocity_field(x_t, t.squeeze(2))
         target = x_1 - torch.sum(x_0, dim=1) # N x d
         pred = self.velocity_field(x_t, t)
         loss = torch.mean((target - pred) ** 2)

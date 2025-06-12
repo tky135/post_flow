@@ -7,7 +7,7 @@ from datasets.distribution import Gaussian, Moon, FlowData
 from rectified_flow.datasets.img_dataset import get_datalooper
 from rectified_flow.utils import visualize_2d_trajectories_plotly
 from scipy.stats import wasserstein_distance
-from utils.visualize import visualize_distribution_evolution, visualize_distribution_with_trajectories
+from utils.visualize import visualize_combined
 import torch
 import argparse
 import matplotlib.pyplot as plt
@@ -108,6 +108,8 @@ def main(args):
     
     # training 
     # optimizer = torch.optim.Adam(net.parameters(), lr=1e-3)
+    # scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda step: 1.0)
+
     optimizer = torch.optim.Adam(net.parameters(), lr=2e-4)
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda step: (min(step, 5000) / 5000))
     
@@ -134,7 +136,7 @@ def main(args):
         cur_step = ckpt['step']
     
     
-    for step in tqdm.tqdm(range(cur_step, 50000)):
+    for step in tqdm.tqdm(range(cur_step, 50000 + 1)):
         x_0, x_1 = next(dataiter)
         if cfg.data.light_weight:
             x_0, x_1 = x_0.squeeze(0), x_1.squeeze(0)
@@ -181,13 +183,13 @@ def main(args):
                 "model": net.state_dict(),
                 "optimizer": optimizer.state_dict(),
                 "scheduler": scheduler.state_dict(),
-                "step": step,
+                "step": step + 1,
                 
             }, os.path.join(ckptdir, f"{args.exp_name}_step_{step}.pt"))
 
 
 
-    SAMPLE_NUM = 100000
+    SAMPLE_NUM = 1000000
     STEP_NUM = [1, 2, 5, 10, 20, 50, 100]
     for step_num in STEP_NUM:
         euler_sampler_1rf_unconditional = EulerSampler(
@@ -200,6 +202,8 @@ def main(args):
 
         x_1_hat = traj_upper[-1]
         x_1_gt = x_1_sample
+        if torch.isnan(x_1_hat).any() or torch.isinf(x_1_hat).any():
+            import ipdb ; ipdb.set_trace()
         wd = cal_wd(x_1_gt, x_1_hat)
         plot_traj(torch.stack(traj_upper, dim=0), distance=wd, title=f"Method: {method}, {step_num} steps", traj_dir=logdir, file_name=f"2d_{method}_{step_num}step.png")
 
@@ -207,9 +211,9 @@ def main(args):
         xt = x_1_hat
         plt.figure()
         if tuple(cfg.data_shape) == (2,):
-            plt.scatter(x_0_sample[:5000, 0].cpu().numpy(), x_0_sample[:5000, 1].cpu().numpy(), c="#1f77b4", label="Source", alpha=0.25, s=3)
-            plt.scatter(x_1_sample[:5000, 0].cpu().numpy(), x_1_sample[:5000, 1].cpu().numpy(), c="#ff7f0e", label="Target", alpha=0.25, s=3)
-            plt.scatter(xt[:5000,0].cpu().numpy(), xt[:5000,1].cpu().numpy(), c="#2ca02c", label=f'Gen SWD={wd:.3f}', alpha=0.25, s=3)
+            plt.scatter(x_0_sample[:10000, 0].cpu().numpy(), x_0_sample[:10000, 1].cpu().numpy(), c="#1f77b4", label="Source", alpha=0.25, s=3)
+            plt.scatter(x_1_sample[:10000, 0].cpu().numpy(), x_1_sample[:10000, 1].cpu().numpy(), c="#ff7f0e", label="Target", alpha=0.25, s=3)
+            plt.scatter(xt[:10000,0].cpu().numpy(), xt[:10000,1].cpu().numpy(), c="#2ca02c", label=f'Gen SWD={wd:.3f}', alpha=0.25, s=3)
         elif tuple(cfg.data_shape) == (1,):
             bins = np.linspace(-2, 2, 201)
             plt.hist(x_1_sample[:, 0].cpu().numpy(), bins=bins, density=True, alpha=0.8, histtype='step', linewidth=1, label=f'Target')
@@ -237,7 +241,7 @@ def main(args):
             fm_model,
             num_steps=100
         )
-        x_0_sample = pi_0.sample(1).to(device)
+        x_0_sample = pi_0.sample(1).to(device) * 0.0
         x_1_sample = pi_1.sample(1).to(device)
         traj_upper = euler_sampler_1rf_unconditional.sample_loop(x_0=x_0_sample).trajectories
 
@@ -253,8 +257,19 @@ def main(args):
             x_1_hat_T_N.append(x_1_hat_batch.squeeze().cpu())
         v_T_N = torch.stack(v_T_N, dim=0)
         x_1_hat_T_N = torch.stack(x_1_hat_T_N, dim=0)
-        visualize_distribution_with_trajectories(v_T_N, os.path.join(logdir, f"velocity_dist_{method}_1d.png"), x_1_hat_T_N=x_1_hat_T_N, num_bins=100)
-        visualize_distribution_evolution(v_T_N, os.path.join(logdir, f"velocity_dist_{method}_1d.html"), num_bins=100)
+        gt_samples = pi_1.sample(BATCH_SIZE)
+        visualize_combined(data_tensor=v_T_N[:, :-1],
+                           trajs={f"{method}": traj_upper},
+                           D1_gt_samples=gt_samples,
+                           save_path=os.path.join(logdir, f"p(v|t)_{method}.html"),
+                           x_range=(-2, 2)
+                           )
+        visualize_combined(data_tensor=x_1_hat_T_N[:, :-1],
+                           trajs={f"{method}": traj_upper},
+                           D1_gt_samples=gt_samples,
+                           save_path=os.path.join(logdir, f"p(x|t)_{method}.html"),
+                           x_range=(-2, 2)
+                           )
 
 
 
