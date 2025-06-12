@@ -30,7 +30,26 @@ class Distribution:
     def __next__(self):
         return self.sample_batch(self.batch_size)
 
+class MGaussian1D(Distribution):
+    def __init__(self):
+        self.dim = 1
+        self.data_shape = (self.dim,)
+        self.mean = torch.tensor([1])
+        # self.mean = torch.tensor([5])
+        self.means = torch.ones((2, self.dim)) * self.mean
+        self.means[1] = -self.means[1]
+        self.var = torch.tensor([0.02])
+        # self.var = torch.tensor([0.5])
+        self.covs = self.var * torch.stack([torch.eye(self.dim) for _ in range(2)])
+        self.probs = torch.tensor([0.5, 0.5])
+        target_mix = Categorical(self.probs)
+        target_comp = MultivariateNormal(self.means, self.covs)
+        self.target_model = MixtureSameFamily(target_mix, target_comp)
+        
+        
 
+    def sample_batch(self, batch_size):
+        return self.target_model.sample([batch_size])
         
 class SixGaussians2D(Distribution):
     def __init__(self):

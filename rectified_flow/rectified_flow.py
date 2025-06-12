@@ -568,7 +568,7 @@ class ScoringRule(RectifiedFlow):
     ):
         super().__init__(*args, **kwargs)
         self.minibatch_size = 100
-        self.beta = 2.0
+        self.beta = 0.1
         self.alpha = 1.0
         
         self.xi_distribution = dist.Normal(

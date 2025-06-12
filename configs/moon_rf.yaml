@@ -10,9 +10,9 @@ data:
     type:
       datasets.distribution.Moon
 
-  batch_size: 10
+  batch_size: 1024
   light_weight: True
-  num_workers: 16
+  num_workers: 8
   prefetch_factor: 4
 
     

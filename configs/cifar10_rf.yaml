@@ -1,0 +1,40 @@
+
+
+data_shape: [3, 32, 32]
+# [EightGaussians2D, Moon, Gaussian]
+data:
+  source: 
+    type:
+      datasets.distribution.Gaussian
+    args:
+      data_shape: ${data_shape}
+  target:
+    type:
+      datasets.distribution.Cifar10
+
+  batch_size: 128
+  light_weight: False
+  num_workers: 32
+  prefetch_factor: 4
+
+    
+
+
+model:
+  method:
+    type:
+      rectified_flow.rectified_flow.RectifiedFlow
+    args:
+      interp: "straight"
+  net:
+    type:
+      models.unet.UNetModelWrapper
+    args:
+      dim: ${data_shape}
+      num_res_blocks: 2
+      num_channels: 128
+      channel_mult: [1, 2, 2, 2]
+      num_heads: 4
+      num_head_channels: 64
+      attention_resolutions: "16"
+      dropout: 0.1

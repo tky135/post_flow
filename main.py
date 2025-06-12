@@ -6,6 +6,8 @@ from rectified_flow.samplers import EulerSampler
 from datasets.distribution import Gaussian, Moon, FlowData
 from rectified_flow.datasets.img_dataset import get_datalooper
 from rectified_flow.utils import visualize_2d_trajectories_plotly
+from scipy.stats import wasserstein_distance
+from utils.visualize import visualize_distribution_evolution, visualize_distribution_with_trajectories
 import torch
 import argparse
 import matplotlib.pyplot as plt
@@ -19,7 +21,14 @@ import numpy as np
 import importlib
 import torchvision
 
-
+def cal_wd(x_1_gt, x_1_hat):
+    assert x_1_gt.shape == x_1_hat.shape, "x_1_gt and x_1_hat must have the same shape"
+    assert len(x_1_gt.shape) == 2, "x_1_gt and x_1_hat must be 2D tensors"
+    
+    if x_1_gt.shape[1] == 1:  # 1D case
+        return wasserstein_distance(x_1_gt.squeeze(-1).cpu().numpy(), x_1_hat.squeeze(-1).cpu().numpy())
+    elif x_1_gt.shape[1] == 2:  # 2D case
+        return ot.sliced_wasserstein_distance(x_1_gt, x_1_hat, seed=1)
 def import_str(string: str):
     """ Import a python module given string paths
 
@@ -147,7 +156,7 @@ def main(args):
                 x_1_gt = pi_1.sample([10000]).to(device)
                 traj_upper = euler_sampler_1rf_unconditional.sample_loop(x_0=x_0_sample).trajectories
                 x_1_hat = traj_upper[-1]
-                wd = ot.sliced_wasserstein_distance(x_1_gt, x_1_hat, seed=1)
+                wd = cal_wd(x_1_gt, x_1_hat)
                 print("SWD:", wd.item())
             else:
                 print(f"Epoch {step}, Loss: {loss.item()}")
@@ -191,15 +200,23 @@ def main(args):
 
         x_1_hat = traj_upper[-1]
         x_1_gt = x_1_sample
-        wd = ot.sliced_wasserstein_distance(x_1_gt, x_1_hat, seed=1)
+        wd = cal_wd(x_1_gt, x_1_hat)
         plot_traj(torch.stack(traj_upper, dim=0), distance=wd, title=f"Method: {method}, {step_num} steps", traj_dir=logdir, file_name=f"2d_{method}_{step_num}step.png")
 
 
         xt = x_1_hat
         plt.figure()
-        plt.scatter(x_0_sample[:5000, 0].cpu().numpy(), x_0_sample[:5000, 1].cpu().numpy(), c="#1f77b4", label="Source", alpha=0.25, s=3)
-        plt.scatter(x_1_sample[:5000, 0].cpu().numpy(), x_1_sample[:5000, 1].cpu().numpy(), c="#ff7f0e", label="Target", alpha=0.25, s=3)
-        plt.scatter(xt[:5000,0].cpu().numpy(), xt[:5000,1].cpu().numpy(), c="#2ca02c", label=f'Gen SWD={wd:.3f}', alpha=0.25, s=3)
+        if tuple(cfg.data_shape) == (2,):
+            plt.scatter(x_0_sample[:5000, 0].cpu().numpy(), x_0_sample[:5000, 1].cpu().numpy(), c="#1f77b4", label="Source", alpha=0.25, s=3)
+            plt.scatter(x_1_sample[:5000, 0].cpu().numpy(), x_1_sample[:5000, 1].cpu().numpy(), c="#ff7f0e", label="Target", alpha=0.25, s=3)
+            plt.scatter(xt[:5000,0].cpu().numpy(), xt[:5000,1].cpu().numpy(), c="#2ca02c", label=f'Gen SWD={wd:.3f}', alpha=0.25, s=3)
+        elif tuple(cfg.data_shape) == (1,):
+            bins = np.linspace(-2, 2, 201)
+            plt.hist(x_1_sample[:, 0].cpu().numpy(), bins=bins, density=True, alpha=0.8, histtype='step', linewidth=1, label=f'Target')
+            plt.hist(xt.cpu().numpy(), bins=bins, density=True, alpha=0.8, histtype='step', linewidth=1, label=f'Gen WD={wd:.3f}')
+        else:
+            raise Exception("Unsupported data shape for visualization")
+    
         plt.title(f"Method: {method}, {step_num} steps", fontsize=20)
         ax = plt.gca()
         ax.spines['top'].set_visible(False)
@@ -213,6 +230,35 @@ def main(args):
         plt.savefig(os.path.join(logdir, f"2d_dist_{method}_{step_num}_step.png"), dpi=300, bbox_inches='tight')
         plt.close()
         print(f"Sliced Wasserstein distance between x_1_hat and x_1_gt: {wd:.4f}")
+
+    # visualize velocity distribution for 1D case
+    if tuple(cfg.data_shape) == (1,):
+        euler_sampler_1rf_unconditional = EulerSampler(
+            fm_model,
+            num_steps=100
+        )
+        x_0_sample = pi_0.sample(1).to(device)
+        x_1_sample = pi_1.sample(1).to(device)
+        traj_upper = euler_sampler_1rf_unconditional.sample_loop(x_0=x_0_sample).trajectories
+
+        BATCH_SIZE = 10000
+        v_T_N, x_1_hat_T_N = [], []
+        for i in range(len(traj_upper)):
+            xt = traj_upper[i]
+            t = i / (len(traj_upper) - 1)
+            xt_batch = xt.repeat(BATCH_SIZE, 1)
+            vt_batch = fm_model.get_velocity(xt_batch, t)
+            x_1_hat_batch = xt_batch + vt_batch * (1 - t)  # Forward Euler step
+            v_T_N.append(vt_batch.squeeze().cpu())
+            x_1_hat_T_N.append(x_1_hat_batch.squeeze().cpu())
+        v_T_N = torch.stack(v_T_N, dim=0)
+        x_1_hat_T_N = torch.stack(x_1_hat_T_N, dim=0)
+        visualize_distribution_with_trajectories(v_T_N, os.path.join(logdir, f"velocity_dist_{method}_1d.png"), x_1_hat_T_N=x_1_hat_T_N, num_bins=100)
+        visualize_distribution_evolution(v_T_N, os.path.join(logdir, f"velocity_dist_{method}_1d.html"), num_bins=100)
+
+
+
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
