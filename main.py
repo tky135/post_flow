@@ -17,6 +17,7 @@ import sys
 import tqdm
 import numpy as np
 import importlib
+import torchvision
 
 
 def import_str(string: str):
@@ -75,10 +76,11 @@ def main(args):
 
     # setup
     logdir = os.path.join(args.logdir, args.exp_name)
-    if not os.path.exists(logdir):
-        os.makedirs(logdir)
+    ckptdir = os.path.join(logdir, "checkpoints")
+    if not os.path.exists(ckptdir):
+        os.makedirs(ckptdir)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    set_seed(0)
+    set_seed(42)
 
     cfg = OmegaConf.load(args.config_file)
     cfg_cli = OmegaConf.from_cli(args.opts)
@@ -95,61 +97,35 @@ def main(args):
     net, fm_model = build_model(cfg.model, source_distribution=pi_0, device=device)
     method = cfg.model.method.type.split('.')[-1]  # Extract the last part of the method type string
     
-
-    # method = "gmflow"  # "scoring_rule", "rf", "hrf", "gmflow"
-    
-    # if method == "scoring_rule":
-    #     net = VNetD(data_dim=4, depth=1, hidden_num=384, output_dim=2).to(device)
-    #     fm_model = ScoringRule(
-    #         data_shape=(2,),
-    #         velocity_field=net,
-    #         interp="straight",
-    #         source_distribution=pi_0,
-    #         device=device,
-    #     )
-    # elif method == "rf":
-    #     net = VNetD(data_dim=2, depth=1, hidden_num=384).to(device)
-    #     fm_model = RectifiedFlow(
-    #         data_shape=(2,),
-    #         velocity_field=net,
-    #         interp="straight",
-    #         source_distribution=pi_0,
-    #         device=device,
-    #     )
-    # elif method == "hrf3":
-    #     net = VNetD(data_dim=2, depth=3).to(device)
-    #     fm_model = HRF(
-    #         data_shape=(2,),
-    #         velocity_field=net,
-    #         interp="straight",
-    #         source_distribution=pi_0,
-    #         device=device,
-    #     )
-    # elif method == "hrf2":
-    #     net = VNetD(data_dim=2, depth=2).to(device)
-    #     fm_model = HRF(
-    #         data_shape=(2,),
-    #         velocity_field=net,
-    #         interp="straight",
-    #         source_distribution=pi_0,
-    #         device=device,
-    #         depth = 2
-    #     )
-    # elif method == "gmflow":
-    #     net = GMFlowMLP2DDenoiser(num_gaussians=64).to(device)
-    #     fm_model = GMFlow(
-    #         data_shape=(2,),
-    #         velocity_field=net,
-    #         interp="straight",
-    #         source_distribution=pi_0,
-    #         device=device,
-    #     )
-    # else:
-    #     raise ValueError(f"Unknown method: {method}. Choose from 'scoring_rule', 'rf', 'hrf', 'gmflow'.")
-
     # training 
-    optimizer = torch.optim.Adam(net.parameters(), lr=1e-3)
-    for step in tqdm.tqdm(range(50000)):
+    # optimizer = torch.optim.Adam(net.parameters(), lr=1e-3)
+    optimizer = torch.optim.Adam(net.parameters(), lr=2e-4)
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda step: (min(step, 5000) / 5000))
+    
+    
+    
+    
+    cur_step = 0
+    # load from checkpoint
+    ckpt_list = os.listdir(ckptdir)
+    if args.resume and len(ckpt_list) > 0:
+        ckpt = sorted(ckpt_list, key=lambda x: int(x.split('_')[-1].split('.')[0]))[-1]
+        print(f"loading {ckpt}")
+        ckpt = torch.load(os.path.join(ckptdir, ckpt), weights_only=True)
+        net.load_state_dict(ckpt['model'])
+        optimizer.load_state_dict(ckpt['optimizer'])
+        scheduler.load_state_dict(ckpt['scheduler'])
+        cur_step = ckpt['step']
+    elif args.resume_from is not None:
+        print(f"loading {args.resume_from}")
+        ckpt = torch.load(args.resume_from, weights_only=True)
+        net.load_state_dict(ckpt['model'])
+        optimizer.load_state_dict(ckpt['optimizer'])
+        scheduler.load_state_dict(ckpt['scheduler'])
+        cur_step = ckpt['step']
+    
+    
+    for step in tqdm.tqdm(range(cur_step, 50000)):
         x_0, x_1 = next(dataiter)
         if cfg.data.light_weight:
             x_0, x_1 = x_0.squeeze(0), x_1.squeeze(0)
@@ -158,19 +134,47 @@ def main(args):
         loss = fm_model.get_loss(x_0, x_1)
         loss.backward()
         optimizer.step()
+        scheduler.step()
 
         if step % 1000 == 0:
-            print(f"Epoch {step}, Loss: {loss.item()}", end='\t')
-            euler_sampler_1rf_unconditional = EulerSampler(
-                fm_model,
-                num_steps=10
-            )
-            x_0_sample = pi_0.sample([10000]).to(device)
-            x_1_gt = pi_1.sample([10000]).to(device)
-            traj_upper = euler_sampler_1rf_unconditional.sample_loop(x_0=x_0_sample).trajectories
-            x_1_hat = traj_upper[-1]
-            wd = ot.sliced_wasserstein_distance(x_1_gt, x_1_hat, seed=1)
-            print("SWD:", wd.item())
+            if len(cfg.data_shape) == 1:
+                print(f"Epoch {step}, Loss: {loss.item()}", end='\t')
+                euler_sampler_1rf_unconditional = EulerSampler(
+                    fm_model,
+                    num_steps=10
+                )
+                x_0_sample = pi_0.sample([10000]).to(device)
+                x_1_gt = pi_1.sample([10000]).to(device)
+                traj_upper = euler_sampler_1rf_unconditional.sample_loop(x_0=x_0_sample).trajectories
+                x_1_hat = traj_upper[-1]
+                wd = ot.sliced_wasserstein_distance(x_1_gt, x_1_hat, seed=1)
+                print("SWD:", wd.item())
+            else:
+                print(f"Epoch {step}, Loss: {loss.item()}")
+                STEPS = 10
+                SAMPLES = 10
+                # display images
+                euler_sampler_1rf_unconditional = EulerSampler(
+                    fm_model,
+                    num_steps=STEPS
+                )
+                x_0_sample = pi_0.sample([SAMPLES]).to(device)
+                traj_upper = euler_sampler_1rf_unconditional.sample_loop(x_0=x_0_sample).trajectories
+                torchvision.utils.save_image(
+                    torch.cat(traj_upper, dim=0),
+                    os.path.join(logdir, f"img_{method}_{step}_iters.png"),
+                    nrow=SAMPLES,
+                    normalize=True,
+                    value_range=(-1, 1)
+                )
+        if step % 10000 == 0:
+            torch.save({
+                "model": net.state_dict(),
+                "optimizer": optimizer.state_dict(),
+                "scheduler": scheduler.state_dict(),
+                "step": step,
+                
+            }, os.path.join(ckptdir, f"{args.exp_name}_step_{step}.pt"))
 
 
 
@@ -215,6 +219,8 @@ if __name__ == "__main__":
     parser.add_argument("--config_file", "-c", type=str, help="Path to the config file")
     parser.add_argument("--logdir", type=str, default="log", help="Directory to save logs and results")
     parser.add_argument("--exp_name", type=str, default="default", help="Experiment name for logging")
+    parser.add_argument("--resume", action='store_true', help="Resume from the last checkpoint")
+    parser.add_argument("--resume_from", type=str, default=None, help="Path to the checkpoint to resume from")
     parser.add_argument("opts", help="Modify config options using the command-line", default=None, nargs=argparse.REMAINDER)
     args = parser.parse_args()
 

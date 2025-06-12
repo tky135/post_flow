@@ -120,11 +120,22 @@ class Cifar10(Distribution):
                 ]
             ),
         )
-        # self.data_shape = self.dataset.data.shape[1:]
+        self.data_shape = (3, 32, 32)  # CIFAR-10 images are 32x32 with 3 color channels
     def sample_batch(self, batch_size):
-        random_idx = torch.randint(0, len(self.dataset), (batch_size,))
-        data, _ = self.dataset[random_idx]
-        return data
+
+        if batch_size == 1:
+            random_idx = torch.randint(0, len(self.dataset), (batch_size,))
+            data, _ = self.dataset[random_idx]
+            return data
+        else:
+            dataloader = torch.utils.data.DataLoader(
+                self.dataset,
+                batch_size=batch_size,
+                shuffle=True,
+                num_workers=0,  # Set to 0 for simplicity in this example
+            )
+            data, _ = next(iter(dataloader))
+            return data
 
 
 

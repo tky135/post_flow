@@ -568,8 +568,8 @@ class ScoringRule(RectifiedFlow):
     ):
         super().__init__(*args, **kwargs)
         self.minibatch_size = 100
-        self.beta = 0.1
-        self.alpha = 10.0
+        self.beta = 2.0
+        self.alpha = 1.0
         
         self.xi_distribution = dist.Normal(
             torch.zeros(self.data_shape, device=self.device, dtype=self.dtype),
@@ -679,7 +679,7 @@ class ScoringRule(RectifiedFlow):
 
         # calculate scoring rule loss
         l_data = torch.sqrt(1e-6 + torch.sum((x_1_hat - x_1)**2, dim=-1))**self.beta
-        l_xi = torch.sqrt(1e-6 + torch.sum((xi.unsqueeze(2) - xi.unsqueeze(1))**2, dim=-1))**self.beta
+        l_xi = torch.sqrt(1e-6 + torch.sum((x_1_hat.unsqueeze(2) - x_1_hat.unsqueeze(1))**2, dim=-1))**self.beta
 
         loss = torch.mean(l_data - self.alpha * torch.sum(l_xi, dim=-1) / 2 / (self.minibatch_size - 1))
 
