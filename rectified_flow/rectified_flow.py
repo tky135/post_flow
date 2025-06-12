@@ -40,8 +40,15 @@ def gm_to_sample(
     Returns:
         torch.Tensor: (bs, *, n_samples, out_channels, h, w)
     """
-    gm_means = gm['means'].unsqueeze(-1).unsqueeze(-1)
-    gm_logweights = gm['logweights'].unsqueeze(-1).unsqueeze(-1)
+    if gm['means'].ndim == 3:
+        gm_means = gm['means'].unsqueeze(-1).unsqueeze(-1)
+        gm_logweights = gm['logweights'].unsqueeze(-1).unsqueeze(-1)
+        stds = gm['logstds'].exp().unsqueeze(-1).unsqueeze(-1)  # (bs, *, 1, 1, 1, 1) or (bs, *, num_gaussians, 1, h, w)
+        
+    else:
+        gm_means = gm['means']
+        gm_logweights = gm['logweights']
+        stds = gm['logstds'].exp()  # (bs, *, num_gaussians, 1, h, w) or (bs, *, 1, h, w, out_channels)
 
     if 'covs' in gm:
         gm_covs = gm['covs']
@@ -100,7 +107,6 @@ def gm_to_sample(
         means = gm_means.gather(  # (bs, *, n_samples, out_channels, h, w)
             dim=-4,
             index=inds.expand(*batch_shapes, n_samples, out_channels, h, w))
-        stds = gm['logstds'].exp().unsqueeze(-1).unsqueeze(-1)  # (bs, *, 1, 1, 1, 1) or (bs, *, num_gaussians, 1, h, w)
         if cov_sharpen:
             stds = stds / math.sqrt(gm_power)
         if stds.size(-4) == num_gaussians and num_gaussians > 1:
@@ -715,12 +721,32 @@ class GMFlow(RectifiedFlow):
         means = gm['means']
         logstds = gm['logstds']
         logweights = gm['logweights']
+        if means.ndim == 3:
+            inverse_stds = torch.exp(-logstds).clamp(max=1 / eps)
+            diff_weighted = (sample.unsqueeze(-2) - means) * inverse_stds  # (bs, num_gaussians, D)
+            gaussian_ll = (-0.5 * diff_weighted.square() - logstds).sum(dim=-1)  # (bs, num_gaussians)
+            # diff_weighted = (sample.unsqueeze(1) - means) * inverse_stds  # (bs, num_gaussians, D)
+            # gaussian_ll = torch.sum((-0.5 * diff_weighted.square() - logstds), dim=tuple(range(2, diff_weighted.ndim)))  # (bs, num_gaussians)
+    
+            gm_nll = -torch.logsumexp(gaussian_ll + logweights.squeeze(-1) + 1e-9, dim=-1)  # (bs, )
+            return gm_nll
+        else:
+            """
+            Args:
+                pred_means (torch.Tensor): Shape (bs, *, num_gaussians, c, h, w)
+                target (torch.Tensor): Shape (bs, *, c, h, w)
+                pred_logstds (torch.Tensor): Shape (bs, *, 1 or num_gaussians, 1 or c, 1 or h, 1 or w)
+                pred_logweights (torch.Tensor): Shape (bs, *, num_gaussians, 1, h, w)
 
-        inverse_stds = torch.exp(-logstds).clamp(max=1 / eps)
-        diff_weighted = (sample.unsqueeze(-2) - means) * inverse_stds  # (bs, num_gaussians, D)
-        gaussian_ll = (-0.5 * diff_weighted.square() - logstds).sum(dim=-1)  # (bs, num_gaussians)
-        gm_nll = -torch.logsumexp(gaussian_ll + logweights.squeeze(-1) + 1e-9, dim=-1)  # (bs, )
-        return gm_nll
+            Returns:
+                torch.Tensor: Shape (bs, *, h, w)
+            """
+            inverse_std = torch.exp(-logstds).clamp(max=1 / eps)
+            diff_weighted = (means - sample.unsqueeze(-4)) * inverse_std
+            gaussian_ll = (-0.5 * diff_weighted.square() - logstds).sum(dim=-3)  # (bs, *, num_gaussians, h, w)
+            loss = -torch.logsumexp(gaussian_ll + logweights.squeeze(-3), dim=-3)
+            return loss
+
     
     
     
@@ -778,7 +804,7 @@ class GMFlow(RectifiedFlow):
         
         gm_pred = self.velocity_field(x_t, t)
         x1_hat = gm_to_sample(gm_pred).reshape(x_t.shape[0], *self.data_shape)
-        velocity = (x1_hat - x_t) / (1 - t.unsqueeze(-1) / self.T_SCALE)
+        velocity = (x1_hat - x_t) / (1 - self.match_dim_with_data(t, x_t.shape, expand_dim=True) / self.T_SCALE)
         return velocity
     
     

@@ -18,19 +18,19 @@ data:
     
 
 
-model:
-  method:
-    type:
-      rectified_flow.rectified_flow.RectifiedFlow
-    args:
-      interp: "straight"
-  net:
-    type:
-      models.toy_mlp.VNetD
-    args:
-      data_dim: 2
-      depth: 1
-      hidden_num: 384
+# model:
+#   method:
+#     type:
+#       rectified_flow.rectified_flow.RectifiedFlow
+#     args:
+#       interp: "straight"
+#   net:
+#     type:
+#       models.toy_mlp.VNetD
+#     args:
+#       data_dim: 2
+#       depth: 1
+#       hidden_num: 384
 
 
 
@@ -66,16 +66,16 @@ model:
 
 
 
-# model:
-#   method:
-#     type:
-#       rectified_flow.rectified_flow.GMFlow
-#     args:
-#       interp: "straight"
-#   net:
-#     type:
-#       models.toy_mlp.GMFlowMLP2DDenoiser
-#     args:
-#       num_gaussians: 64
-#       data_shape: ${data_shape}
+model:
+  method:
+    type:
+      rectified_flow.rectified_flow.GMFlow
+    args:
+      interp: "straight"
+  net:
+    type:
+      models.toy_mlp.GMFlowMLP2DDenoiser
+    args:
+      num_gaussians: 64
+      data_shape: ${data_shape}
 

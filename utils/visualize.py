@@ -10,7 +10,7 @@ def build_normalized_histogram_fig(
     x_range: tuple[float, float] = None,
 ):
     """
-    Animated histogram where each frame’s bars integrate to 1.
+    Animated histogram where each frame's bars integrate to 1.
     """
     data_array = data_tensor.detach().cpu().numpy()
     T, N = data_array.shape
@@ -30,19 +30,21 @@ def build_normalized_histogram_fig(
              for t in range(T)]
 
     # find the tallest bin across all frames for y‐axis limits
-    max_density = max(h.max() for h in hists)
+    # Need to scale by width since we're plotting height * width
+    max_density = max((h * width).max() for h in hists)
 
     # build the plotly figure and frames
-    fig = go.Figure([go.Bar(x=centers, y=hists[0], width=width, opacity=0.8)])
+    # Scale the heights by bin width so the bars visually integrate to 1
+    fig = go.Figure([go.Bar(x=centers, y=hists[0] * width, width=width, opacity=0.8)])
     fig.frames = [
-        go.Frame(data=[go.Bar(x=centers, y=hists[t], width=width)], name=str(t))
+        go.Frame(data=[go.Bar(x=centers, y=hists[t] * width, width=width)], name=str(t))
         for t in range(T)
     ]
 
     fig.update_layout(
         title=dict(text=title, x=0.5),
         xaxis=dict(title="Value", range=[mn, mx]),
-        yaxis=dict(title="Density", range=[0, max_density]),
+        yaxis=dict(title="Density × Width", range=[0, max_density]),
         updatemenus=[dict(
             type="buttons", showactive=False, y=1.05,
             buttons=[dict(label="► Play", method="animate", args=[
@@ -95,17 +97,14 @@ def build_1d_trajectory_fig(
 
     fig = go.Figure()
 
-    # static lines (particles over time)
-    for L in trajs.values():
-        stacked = np.stack([t.detach().cpu().numpy().ravel() for t in L])  # [T,P]
-        P = stacked.shape[1]
-        for i in range(min(num_particles, P)):
-            fig.add_trace(go.Scatter(
-                x=stacked[:, i],
-                y=np.linspace(0, 1, T),
-                mode="lines", line=dict(width=1),
-                opacity=0.3, showlegend=False
-            ))
+    # initial particles at y=0
+    for name, L in trajs.items():
+        x0 = L[0].detach().cpu().numpy().ravel()
+        fig.add_trace(go.Scatter(
+            x=x0, y=np.zeros_like(x0),
+            mode="markers", marker=dict(size=6),
+            name=name
+        ))
 
     # ground-truth at y=1
     if D1_gt_samples is not None:
@@ -116,27 +115,85 @@ def build_1d_trajectory_fig(
             name="GT", showlegend=True
         ))
 
-    # initial particles at y=0
+    # Create traces for each particle - both the trail and the marker
+    trace_indices = {"trails": [], "markers": []}
     for name, L in trajs.items():
-        x0 = L[0].detach().cpu().numpy().ravel()
-        fig.add_trace(go.Scatter(
-            x=x0, y=np.zeros_like(x0),
-            mode="markers", marker=dict(size=6),
-            name=name
-        ))
-
-    # animated markers
+        stacked = np.stack([t.detach().cpu().numpy().ravel() for t in L])  # [T,P]
+        P = stacked.shape[1]
+        
+        # Add trail traces (initially just the starting point)
+        for i in range(min(num_particles, P)):
+            fig.add_trace(go.Scatter(
+                x=[stacked[0, i]], 
+                y=[0],
+                mode="lines",
+                line=dict(color="gray", width=1.5),
+                opacity=0.5,
+                showlegend=False
+            ))
+            trace_indices["trails"].append(len(fig.data) - 1)
+        
+        # Add marker traces
+        for i in range(min(num_particles, P)):
+            fig.add_trace(go.Scatter(
+                x=[stacked[0, i]], 
+                y=[0],
+                mode="markers",
+                marker=dict(size=8),
+                opacity=1,
+                showlegend=False
+            ))
+            trace_indices["markers"].append(len(fig.data) - 1)
+    
+    # Create frames that update both trails and markers
     frames = []
     for t in range(T):
-        pts = []
-        for L in trajs.values():
+        frame_data = []
+        
+        # Update trails - add points up to current time
+        particle_idx = 0
+        for name, L in trajs.items():
+            if t < len(L):
+                stacked = np.stack([L[ti].detach().cpu().numpy().ravel() for ti in range(t+1)])
+                P = stacked.shape[1]
+                for i in range(min(num_particles, P)):
+                    y_vals = [ti / (len(L) - 1) if len(L) > 1 else 0 for ti in range(t+1)]
+                    frame_data.append(go.Scatter(
+                        x=stacked[:, i],
+                        y=y_vals,
+                        mode="lines",
+                        line=dict(color="gray", width=1.5),
+                        opacity=0.5,
+                        showlegend=False
+                    ))
+                    particle_idx += 1
+        
+        # Update markers - current position only
+        particle_idx = 0
+        for name, L in trajs.items():
             if t < len(L):
                 x = L[t].detach().cpu().numpy().ravel()
-                y = np.full_like(x, t / (len(L) - 1))
-                pts.append(go.Scatter(
-                    x=x, y=y, mode="markers", marker=dict(size=6), opacity=0.8
-                ))
-        frames.append(go.Frame(data=pts, name=str(t)))
+                P = len(x)
+                for i in range(min(num_particles, P)):
+                    y_val = t / (len(L) - 1) if len(L) > 1 else 0
+                    frame_data.append(go.Scatter(
+                        x=[x[i]],
+                        y=[y_val],
+                        mode="markers",
+                        marker=dict(size=8),
+                        opacity=1,
+                        showlegend=False
+                    ))
+                    particle_idx += 1
+        
+        # Only update the animated traces, not the static ones
+        frame = go.Frame(
+            data=frame_data,
+            name=str(t),
+            traces=trace_indices["trails"] + trace_indices["markers"]
+        )
+        frames.append(frame)
+    
     fig.frames = frames
 
     fig.update_layout(
@@ -170,6 +227,7 @@ def visualize_combined(
     D1_gt_samples: torch.Tensor = None,
     save_path: str = "combined.html",
     x_range: tuple[float, float] = None,
+    titles: tuple[str, str] = ("Normalized Histogram", "1D Trajectories")
 ):
     """
     Vertically stacks the normalized-histogram and 1D-trajectory animations.
@@ -181,21 +239,40 @@ def visualize_combined(
 
     combined = make_subplots(
         rows=2, cols=1, vertical_spacing=0.12,
-        subplot_titles=("Normalized Histogram", "1D Trajectories")
+        subplot_titles=titles
     )
+    
+    # Track how many traces belong to histogram
+    histogram_trace_count = len(fh.data)
+    
     # add all static traces
     for tr in fh.data:
         combined.add_trace(tr, row=1, col=1)
     for tr in ft.data:
         combined.add_trace(tr, row=2, col=1)
 
-    # merge frames
+    # merge frames - need to adjust trace indices for trajectory animation
     frames = []
     for t in range(len(fh.frames)):
-        frames.append(go.Frame(
-            data=fh.frames[t].data + ft.frames[t].data,
-            name=str(t)
-        ))
+        # Get trajectory frame and adjust trace indices if present
+        traj_frame = ft.frames[t]
+        
+        # Adjust trace indices for the combined figure
+        if hasattr(traj_frame, 'traces') and traj_frame.traces is not None:
+            # Offset trajectory trace indices by the number of histogram traces
+            adjusted_traces = [histogram_trace_count + idx for idx in traj_frame.traces]
+            frame = go.Frame(
+                data=fh.frames[t].data + traj_frame.data,
+                name=str(t),
+                traces=[0] + adjusted_traces  # [0] for histogram, adjusted indices for trajectory
+            )
+        else:
+            frame = go.Frame(
+                data=fh.frames[t].data + traj_frame.data,
+                name=str(t)
+            )
+        
+        frames.append(frame)
     combined.frames = frames
 
     # enforce the same x_range on both panels
@@ -227,5 +304,5 @@ def visualize_combined(
         )]
     )
 
-    combined.write_html(save_path, include_plotlyjs="cdn")
+    combined.write_html(save_path, include_plotlyjs="cdn", auto_play=False)
     print(f"Saved animation to {save_path}")

@@ -262,13 +262,15 @@ def main(args):
                            trajs={f"{method}": traj_upper},
                            D1_gt_samples=gt_samples,
                            save_path=os.path.join(logdir, f"p(v|t)_{method}.html"),
-                           x_range=(-2, 2)
+                           x_range=(-2, 2),
+                           titles=(f"p(v|t) for {method}", "Trajectory")
                            )
         visualize_combined(data_tensor=x_1_hat_T_N[:, :-1],
                            trajs={f"{method}": traj_upper},
                            D1_gt_samples=gt_samples,
                            save_path=os.path.join(logdir, f"p(x|t)_{method}.html"),
-                           x_range=(-2, 2)
+                           x_range=(-2, 2),
+                            titles=(f"p(x|t) for {method}", "Trajectory")
                            )
 
 
