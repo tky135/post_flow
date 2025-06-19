@@ -6,6 +6,7 @@ from typing import Union
 from torch.distributions import Categorical
 from torch.distributions.multivariate_normal import MultivariateNormal
 from torch.distributions.mixture_same_family import MixtureSameFamily
+import os
 class Distribution:
     def __init__(self):
         self.data_shape = None
@@ -139,7 +140,20 @@ class Cifar10(Distribution):
                 ]
             ),
         )
+        
+        self.val_dataset = datasets.CIFAR10(
+            root="./data",
+            train=False,
+            download=True,
+            transform=transforms.Compose(
+                [
+                    transforms.ToTensor(),
+                    transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+                ]
+            ),
+        )
         self.data_shape = (3, 32, 32)  # CIFAR-10 images are 32x32 with 3 color channels
+
     def sample_batch(self, batch_size):
 
         if batch_size == 1:
@@ -155,9 +169,19 @@ class Cifar10(Distribution):
             )
             data, _ = next(iter(dataloader))
             return data
+    
+    def write_val_data(self, path):
+        import torchvision
+        if not os.path.exists(path):
+            os.makedirs(path)
+        for i, (data, target) in enumerate(self.val_dataset):
+            data = data / 2 + 0.5  # Rescale to [0, 1]
+            torchvision.utils.save_image(data, os.path.join(path, f"{i}.png"))
+        print(f"Validation data saved to {path}")
 
+            
 
-
+    
 
 
 class FlowData(torch.utils.data.IterableDataset):

@@ -880,8 +880,12 @@ class UNetModelWrapper(UNetModel):
         use_fp16=False,
         use_new_attention_order=False,
         out_channels=3,
+        gs_num=64,
     ):
         """Dim (tuple): (C, H, W)"""
+
+        self.gs_num=gs_num
+        
         image_size = dim[-1]
         if channel_mult is None:
             if image_size == 512:
@@ -929,10 +933,10 @@ class UNetModelWrapper(UNetModel):
         out_tensor = super().forward(t.squeeze(-1), x, y=y)
 
         gm = {}
-        gm["means"], gm["logstds"], gm["logweights"] = out_tensor[:, :3 * 64], out_tensor[:, 3 * 64:4 * 64], out_tensor[:, 4 * 64:5 * 64]
-        gm["means"] = einops.rearrange(gm["means"], "b (g c) h w -> b g c h w", c=3, g=64)
-        
-        gm["logstds"] = einops.rearrange(gm["logstds"], "b (g c) h w -> b g c h w", c=1, g=64)
-        gm["logweights"] = einops.rearrange(gm["logweights"], "b (g c) h w -> b g c h w", c=1, g=64)
+        gm["means"], gm["logstds"], gm["logweights"] = out_tensor[:, :3 * self.gs_num], out_tensor[:, 3 * self.gs_num:4 * self.gs_num], out_tensor[:, 4 * self.gs_num:5 * self.gs_num]
+        gm["means"] = einops.rearrange(gm["means"], "b (g c) h w -> b g c h w", c=3, g=self.gs_num)
+
+        gm["logstds"] = einops.rearrange(gm["logstds"], "b (g c) h w -> b g c h w", c=1, g=self.gs_num)
+        gm["logweights"] = einops.rearrange(gm["logweights"], "b (g c) h w -> b g c h w", c=1, g=self.gs_num)
         return gm
         

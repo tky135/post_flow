@@ -193,9 +193,18 @@ class SinusoidalPosEmb(torch.nn.Module):
         return emb
 
 class VNetD(torch.nn.Module):
-    def __init__(self, data_dim=2, depth=2, hidden_num=128, output_dim=None):
+    def __init__(self, data_dim=2, depth=1, hidden_num=128, input_dim=None, output_dim=None):
         super().__init__()
         dim = self.dim = 64
+        self.data_dim = data_dim
+        
+        if input_dim is None:
+            input_dim = data_dim
+        if output_dim is None:
+            output_dim = data_dim
+
+        self.input_dim = input_dim
+        self.output_dim = output_dim
 
         self.time_mlp = torch.nn.Sequential(
             SinusoidalPosEmb(dim),
@@ -211,16 +220,13 @@ class VNetD(torch.nn.Module):
             torch.nn.Linear(dim,dim),
             torch.nn.Flatten(),
             torch.nn.GELU(),
-            torch.nn.Linear(data_dim*depth*dim,depth*dim),
+            torch.nn.Linear(self.input_dim*depth*dim,depth*dim),
             # torch.nn.LayerNorm(dim),
         )
 
         self.fc1 = torch.nn.Linear(2*depth*dim, 2*depth*hidden_num, bias=True)
         self.fc2 = torch.nn.Linear(2*depth*hidden_num, depth*hidden_num, bias=True)
-        if output_dim is None:
-            self.fc3 = torch.nn.Linear(depth*hidden_num, data_dim, bias=True)
-        else:
-            self.fc3 = torch.nn.Linear(depth*hidden_num, output_dim, bias=True)
+        self.fc3 = torch.nn.Linear(depth*hidden_num, self.output_dim, bias=True)
         self.act = torch.nn.GELU()
 
         self.init_weights()
@@ -250,3 +256,44 @@ class VNetD(torch.nn.Module):
 
         return x
 
+class LatentNet(torch.nn.Module):
+    def __init__(self, latent_dim, data_dim=2):
+        super().__init__()
+
+        dim = 64
+        real_data_dim = data_dim
+
+        data_dim = dim
+        self.latent_dim = latent_dim
+
+        self.data_mlp = torch.nn.Sequential(
+            SinusoidalPosEmb(dim),
+            torch.nn.Linear(data_dim,data_dim)
+        )
+
+        self.latent_mlp = torch.nn.Sequential(
+            SinusoidalPosEmb(dim),
+            torch.nn.Linear(data_dim,data_dim)
+        )
+        
+
+        self.out_mlp = torch.nn.Sequential(
+            torch.nn.Linear(2*data_dim * real_data_dim,2*data_dim * real_data_dim),
+            torch.nn.GELU(),
+            torch.nn.Linear(2*data_dim * real_data_dim, self.latent_dim)
+        )
+    
+    def forward(self,x_t,noise):
+        latent_emb = self.latent_mlp(noise.squeeze(-1)).reshape(noise.shape[0],-1)
+        x_t_emb = self.data_mlp(x_t.squeeze(-1)).reshape(noise.shape[0],-1)
+        return self.out_mlp(torch.cat([x_t_emb,latent_emb],dim=-1))
+
+
+
+class VRFNet(VNetD):
+    def __init__(self, latent_dim=2, data_dim=2, **kwargs):
+        super().__init__(data_dim=data_dim, depth=1, hidden_num=128, **kwargs)
+        self.latent_mlp = LatentNet(latent_dim=latent_dim, data_dim=data_dim)
+        
+    def forward(self, xt, t, z):
+        return super().forward(xt, t, z)

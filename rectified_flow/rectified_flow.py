@@ -215,6 +215,15 @@ class RectifiedFlow:
                 )
 
         self.independent_coupling = is_independent_coupling
+        
+    def get_sample_kwargs(self, shape) -> Dict[str, Any]:
+        r"""Get the keyword arguments for sampling from the source distribution.
+
+        Returns:
+            kwargs (`Dict[str, Any]`):
+                A dictionary containing the keyword arguments for sampling.
+        """
+        return {}
 
     def sample_train_time(self, batch_size: int, expand_dim: bool = False):
         r"""This method calls the `TrainTimeSampler` to sample training times.
@@ -569,14 +578,17 @@ class ScoringRule(RectifiedFlow):
     
     def __init__(
         self,
+        minibatch_size: int = 100,
+        beta: float = 0.1,
+        alpha: float = 1.0,
         *args,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
-        self.minibatch_size = 100
-        self.beta = 0.1
-        self.alpha = 1.0
-        
+        self.minibatch_size = minibatch_size
+        self.beta = beta
+        self.alpha = alpha
+
         self.xi_distribution = dist.Normal(
             torch.zeros(self.data_shape, device=self.device, dtype=self.dtype),
             torch.ones(self.data_shape, device=self.device, dtype=self.dtype),
@@ -610,7 +622,7 @@ class ScoringRule(RectifiedFlow):
         if t == 1.0:
             return torch.zeros_like(x_t, device=self.device, dtype=self.dtype)
         
-        t = self.match_dim_with_data(t, x_t.shape, expand_dim=False).unsqueeze(-1)
+        t = self.match_dim_with_data(t, x_t.shape, expand_dim=False).reshape(x_t.shape[0], *[1] * (len(self.data_shape)))
         xi = self.xi_distribution.sample((x_t.shape[0],))
         x1_hat = self.velocity_field(x_t, t, xi)
         velocity = (x1_hat - x_t) / (1 - t)
@@ -626,7 +638,7 @@ class ScoringRule(RectifiedFlow):
     ):
         temp_data_shape = (x_t.shape[0], x_t.shape[1])
         flat_data_dim= x_t.shape[0] * x_t.shape[1]
-        x_1_hat = self.velocity_field(x_t.view(flat_data_dim, *self.data_shape), t.view(flat_data_dim, 1), xi.view(flat_data_dim, *self.data_shape)).view(*temp_data_shape, *self.data_shape)
+        x_1_hat = self.velocity_field(x_t.view(flat_data_dim, *self.data_shape), t.view(flat_data_dim, *(t.shape[2:])), xi.view(flat_data_dim, *self.data_shape)).view(*temp_data_shape, *self.data_shape)
         return x_1_hat
 
     
@@ -679,15 +691,16 @@ class ScoringRule(RectifiedFlow):
 
         x_t, dot_x_t = self.get_interpolation(x_0, x_1, t)
         
-        x_t = x_t.unsqueeze(1).repeat(1, self.minibatch_size, 1)
+        x_t = x_t.unsqueeze(1).repeat(1, self.minibatch_size, *[1] * len(self.data_shape))
         t = t.unsqueeze(1).repeat(1, self.minibatch_size).unsqueeze(-1)
-        x_1 = x_1.unsqueeze(1).repeat(1, self.minibatch_size, 1)
+        t = t.reshape(*t.shape, *[1] * (len(self.data_shape) - 1))
+        x_1 = x_1.unsqueeze(1).repeat(1, self.minibatch_size, *[1] * len(self.data_shape))
         x_1_hat = self.sample_posterior(x_t, t, xi)
         # time_weights = self.train_time_weight(t)
 
         # calculate scoring rule loss
-        l_data = torch.sqrt(1e-6 + torch.sum((x_1_hat - x_1)**2, dim=-1))**self.beta
-        l_xi = torch.sqrt(1e-6 + torch.sum((x_1_hat.unsqueeze(2) - x_1_hat.unsqueeze(1))**2, dim=-1))**self.beta
+        l_data = torch.sqrt(1e-6 + torch.sum((x_1_hat - x_1)**2, dim=tuple(range(2, len(x_1.shape)))))**self.beta
+        l_xi = torch.sqrt(1e-6 + torch.sum((x_1_hat.unsqueeze(2) - x_1_hat.unsqueeze(1))**2, dim=tuple(range(3, len(x_1.shape) + 1))))**self.beta
 
         loss = torch.mean(l_data - self.alpha * torch.sum(l_xi, dim=-1) / 2 / (self.minibatch_size - 1))
 
@@ -912,3 +925,71 @@ class HRF(RectifiedFlow):
         ts_all[0] = t
         
         return self.sample_hierarchical(x_t, ts_all, cur_depth=1, return_traj=False)[1]
+    
+    
+    
+class VRF(RectifiedFlow):
+    def __init__(
+        self,
+        *args,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+
+        
+        self.latent_dim = 2
+        # temporary model
+        # from vrf import Net, LatentNet
+
+
+        # self.latent_model = LatentNet(out_dim=self.latent_dim).to(self.device)
+        # self.velocity_field = Net(self.latent_dim, False).to(self.device)
+        
+        
+    def get_sample_kwargs(self, shape):
+
+        latent_sample = torch.randn((shape[0], self.latent_dim), device=self.device, dtype=self.dtype)
+        return {'latent_sample': latent_sample}
+        
+        
+        
+    def get_velocity(self, x_t, t, **kwargs):
+        
+        # if 'latent_sample' in kwargs:
+        #     latent_sample = kwargs['latent_sample']
+        # else:
+        #     latent_sample = torch.randn((x_t.shape[0], self.latent_dim), device=self.device, dtype=self.dtype)
+        latent_sample = kwargs['latent_sample']
+        t = self.match_dim_with_data(t, x_t.shape, expand_dim=True)
+
+        v_t = self.velocity_field(x_t, t, latent_sample)
+        
+        return v_t
+        
+    
+    def get_loss(self, x_0, x_1, t = None, **kwargs):
+        
+        t = torch.rand((x_1.shape[0],), device=self.device, dtype=self.dtype) if t is None else t
+
+        t = self.match_dim_with_data(t, x_1.shape, expand_dim=True)
+
+        x_t = (1 - t) * x_0 + t * x_1
+        
+        
+        latent = self.velocity_field.latent_mlp(x_1, x_0) # should be x_t, x_0
+        latent_sample = latent + torch.randn_like(latent)
+        
+        
+        v_t = self.velocity_field(x_t, t, latent_sample)
+        
+        target = x_1 - x_0
+        loss = torch.mean(
+            (v_t - target) ** 2
+        )
+        
+        loss_kl = 0.5 * torch.mean(torch.norm(latent, p=2, dim=-1) ** 2)
+        loss += loss_kl
+        
+        return loss
+        
+        

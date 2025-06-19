@@ -111,6 +111,7 @@ def main(args):
     # scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda step: 1.0)
 
     optimizer = torch.optim.Adam(net.parameters(), lr=2e-4)
+    # optimizer = torch.optim.Adam(list(fm_model.latent_model.parameters()) + list(fm_model.velocity_field.parameters()), lr=2e-4)
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda step: (min(step, 5000) / 5000))
     
     
@@ -156,7 +157,7 @@ def main(args):
                 )
                 x_0_sample = pi_0.sample([10000]).to(device)
                 x_1_gt = pi_1.sample([10000]).to(device)
-                traj_upper = euler_sampler_1rf_unconditional.sample_loop(x_0=x_0_sample).trajectories
+                traj_upper = euler_sampler_1rf_unconditional.sample_loop(x_0=x_0_sample, **fm_model.get_sample_kwargs(x_0_sample.shape)).trajectories
                 x_1_hat = traj_upper[-1]
                 wd = cal_wd(x_1_gt, x_1_hat)
                 print("SWD:", wd.item())
@@ -170,7 +171,7 @@ def main(args):
                     num_steps=STEPS
                 )
                 x_0_sample = pi_0.sample([SAMPLES]).to(device)
-                traj_upper = euler_sampler_1rf_unconditional.sample_loop(x_0=x_0_sample).trajectories
+                traj_upper = euler_sampler_1rf_unconditional.sample_loop(x_0=x_0_sample, **fm_model.get_sample_kwargs(x_0_sample.shape)).trajectories
                 torchvision.utils.save_image(
                     torch.cat(traj_upper, dim=0),
                     os.path.join(logdir, f"img_{method}_{step}_iters.png"),
@@ -189,51 +190,53 @@ def main(args):
 
 
 
-    SAMPLE_NUM = 1000000
-    STEP_NUM = [1, 2, 5, 10, 20, 50, 100]
-    for step_num in STEP_NUM:
-        euler_sampler_1rf_unconditional = EulerSampler(
-            fm_model,
-            num_steps=step_num
-        )
-        x_0_sample = pi_0.sample(SAMPLE_NUM).to(device)
-        x_1_sample = pi_1.sample(SAMPLE_NUM).to(device)
-        traj_upper = euler_sampler_1rf_unconditional.sample_loop(x_0=x_0_sample).trajectories
 
-        x_1_hat = traj_upper[-1]
-        x_1_gt = x_1_sample
-        if torch.isnan(x_1_hat).any() or torch.isinf(x_1_hat).any():
-            import ipdb ; ipdb.set_trace()
-        wd = cal_wd(x_1_gt, x_1_hat)
-        plot_traj(torch.stack(traj_upper, dim=0), distance=wd, title=f"Method: {method}, {step_num} steps", traj_dir=logdir, file_name=f"2d_{method}_{step_num}step.png")
+    if tuple(cfg.data_shape) in [(2,), (1,)]:
+        SAMPLE_NUM = 1000000
+        STEP_NUM = [1, 2, 5, 10, 20, 50, 100]
+        for step_num in STEP_NUM:
+            euler_sampler_1rf_unconditional = EulerSampler(
+                fm_model,
+                num_steps=step_num
+            )
+            x_0_sample = pi_0.sample(SAMPLE_NUM).to(device)
+            x_1_sample = pi_1.sample(SAMPLE_NUM).to(device)
+            traj_upper = euler_sampler_1rf_unconditional.sample_loop(x_0=x_0_sample, **fm_model.get_sample_kwargs(x_0_sample.shape)).trajectories
+
+            x_1_hat = traj_upper[-1]
+            x_1_gt = x_1_sample
+            if torch.isnan(x_1_hat).any() or torch.isinf(x_1_hat).any():
+                import ipdb ; ipdb.set_trace()
+            wd = cal_wd(x_1_gt, x_1_hat)
+            plot_traj(torch.stack(traj_upper, dim=0), distance=wd, title=f"Method: {method}, {step_num} steps", traj_dir=logdir, file_name=f"2d_{method}_{step_num}step.png")
 
 
-        xt = x_1_hat
-        plt.figure()
-        if tuple(cfg.data_shape) == (2,):
-            plt.scatter(x_0_sample[:10000, 0].cpu().numpy(), x_0_sample[:10000, 1].cpu().numpy(), c="#1f77b4", label="Source", alpha=0.25, s=3)
-            plt.scatter(x_1_sample[:10000, 0].cpu().numpy(), x_1_sample[:10000, 1].cpu().numpy(), c="#ff7f0e", label="Target", alpha=0.25, s=3)
-            plt.scatter(xt[:10000,0].cpu().numpy(), xt[:10000,1].cpu().numpy(), c="#2ca02c", label=f'Gen SWD={wd:.3f}', alpha=0.25, s=3)
-        elif tuple(cfg.data_shape) == (1,):
-            bins = np.linspace(-2, 2, 201)
-            plt.hist(x_1_sample[:, 0].cpu().numpy(), bins=bins, density=True, alpha=0.8, histtype='step', linewidth=1, label=f'Target')
-            plt.hist(xt.cpu().numpy(), bins=bins, density=True, alpha=0.8, histtype='step', linewidth=1, label=f'Gen WD={wd:.3f}')
-        else:
-            raise Exception("Unsupported data shape for visualization")
-    
-        plt.title(f"Method: {method}, {step_num} steps", fontsize=20)
-        ax = plt.gca()
-        ax.spines['top'].set_visible(False)
-        ax.spines['right'].set_visible(False)
-        plt.xticks(fontsize=16)
-        plt.yticks(fontsize=16)
-        plt.axis('off')
+            xt = x_1_hat
+            plt.figure()
+            if tuple(cfg.data_shape) == (2,):
+                plt.scatter(x_0_sample[:10000, 0].cpu().numpy(), x_0_sample[:10000, 1].cpu().numpy(), c="#1f77b4", label="Source", alpha=0.25, s=3)
+                plt.scatter(x_1_sample[:10000, 0].cpu().numpy(), x_1_sample[:10000, 1].cpu().numpy(), c="#ff7f0e", label="Target", alpha=0.25, s=3)
+                plt.scatter(xt[:10000,0].cpu().numpy(), xt[:10000,1].cpu().numpy(), c="#2ca02c", label=f'Gen SWD={wd:.3f}', alpha=0.25, s=3)
+            elif tuple(cfg.data_shape) == (1,):
+                bins = np.linspace(-2, 2, 201)
+                plt.hist(x_1_sample[:, 0].cpu().numpy(), bins=bins, density=True, alpha=0.8, histtype='step', linewidth=1, label=f'Target')
+                plt.hist(xt.cpu().numpy(), bins=bins, density=True, alpha=0.8, histtype='step', linewidth=1, label=f'Gen WD={wd:.3f}')
+            else:
+                raise Exception("Unsupported data shape for visualization")
         
-        plt.legend(fontsize=16, framealpha=0.5, loc='upper right')
-        plt.tight_layout()
-        plt.savefig(os.path.join(logdir, f"2d_dist_{method}_{step_num}_step.png"), dpi=300, bbox_inches='tight')
-        plt.close()
-        print(f"Sliced Wasserstein distance between x_1_hat and x_1_gt: {wd:.4f}")
+            plt.title(f"Method: {method}, {step_num} steps", fontsize=20)
+            ax = plt.gca()
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+            plt.xticks(fontsize=16)
+            plt.yticks(fontsize=16)
+            plt.axis('off')
+            
+            plt.legend(fontsize=16, framealpha=0.5, loc='upper right')
+            plt.tight_layout()
+            plt.savefig(os.path.join(logdir, f"2d_dist_{method}_{step_num}_step.png"), dpi=300, bbox_inches='tight')
+            plt.close()
+            print(f"Sliced Wasserstein distance between x_1_hat and x_1_gt: {wd:.4f}")
 
     # visualize velocity distribution for 1D case
     if tuple(cfg.data_shape) == (1,):
@@ -243,15 +246,16 @@ def main(args):
         )
         x_0_sample = pi_0.sample(1).to(device) * 0.0
         x_1_sample = pi_1.sample(1).to(device)
-        traj_upper = euler_sampler_1rf_unconditional.sample_loop(x_0=x_0_sample).trajectories
+        traj_upper = euler_sampler_1rf_unconditional.sample_loop(x_0=x_0_sample, **fm_model.get_sample_kwargs(x_0_sample.shape)).trajectories
 
         BATCH_SIZE = 10000
         v_T_N, x_1_hat_T_N = [], []
+        sample_kwargs = fm_model.get_sample_kwargs((BATCH_SIZE, 1))
         for i in range(len(traj_upper)):
             xt = traj_upper[i]
             t = i / (len(traj_upper) - 1)
             xt_batch = xt.repeat(BATCH_SIZE, 1)
-            vt_batch = fm_model.get_velocity(xt_batch, t)
+            vt_batch = fm_model.get_velocity(xt_batch, t, **sample_kwargs)
             x_1_hat_batch = xt_batch + vt_batch * (1 - t)  # Forward Euler step
             v_T_N.append(vt_batch.squeeze().cpu())
             x_1_hat_T_N.append(x_1_hat_batch.squeeze().cpu())
@@ -272,6 +276,50 @@ def main(args):
                            x_range=(-2, 2),
                             titles=(f"p(x|t) for {method}", "Trajectory")
                            )
+    elif len(tuple(cfg.data_shape)) == 3:
+        TOTAL_NUM = 10000
+        BATCH_SIZE = 100
+        for idx in tqdm.tqdm(range(0, TOTAL_NUM, BATCH_SIZE)):
+            if idx + BATCH_SIZE > TOTAL_NUM:
+                BATCH_SIZE = TOTAL_NUM - idx
+            euler_sampler_1rf_unconditional = EulerSampler(
+                    fm_model,
+                    num_steps=10
+                )
+            x_0_sample = pi_0.sample(BATCH_SIZE).to(device)
+            
+            traj_upper = euler_sampler_1rf_unconditional.sample_loop(x_0=x_0_sample, **fm_model.get_sample_kwargs(x_0_sample.shape)).trajectories
+            x_1_hat = traj_upper[-1]
+
+            x_1_hat = x_1_hat / 2 + 0.5
+            if idx == 0:
+                torchvision.utils.save_image(
+                    x_1_hat,
+                    os.path.join(logdir, f"img_{method}_final.png"),
+                    nrow=10,
+                    normalize=True,
+                    value_range=(0, 1)
+                )
+
+            # save validation data
+            for i in range(BATCH_SIZE):
+                val_out = os.path.join(logdir, "val_images")
+                if not os.path.exists(val_out):
+                    os.makedirs(val_out)
+                torchvision.utils.save_image(
+                    x_1_hat[i],
+                    os.path.join(val_out, f"{idx + i}.png"),
+                    normalize=True,
+                    value_range=(0, 1)
+                )
+        
+        
+        pi_1.write_val_data(os.path.join(logdir, "val_images_gt"))
+
+        
+        
+
+        
 
 
 

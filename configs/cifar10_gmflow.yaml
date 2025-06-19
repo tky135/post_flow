@@ -39,3 +39,5 @@ model:
       num_head_channels: 64
       attention_resolutions: "16"
       dropout: 0.1
+      gs_num: 8
+      

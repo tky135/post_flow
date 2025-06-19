@@ -668,11 +668,6 @@ class UNetModelWrapper(UNetModel):
             use_new_attention_order=use_new_attention_order,
         )
 
-    def forward(self, x, t, y=None, *args, **kwargs):
-        t_v = t[:, 1]
-        t = t[:, 0]
-        v = x[:, 1]
-        xt = x[:, 0]
-        
-        return super().forward(t_v, v, t, xt, y=y)
+    def forward(self, xt, t, xi, y=None, *args, **kwargs):
+        return super().forward(t, xi, t, xt, y=y)
 
