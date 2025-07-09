@@ -741,7 +741,7 @@ class GMFlow(RectifiedFlow):
             # diff_weighted = (sample.unsqueeze(1) - means) * inverse_stds  # (bs, num_gaussians, D)
             # gaussian_ll = torch.sum((-0.5 * diff_weighted.square() - logstds), dim=tuple(range(2, diff_weighted.ndim)))  # (bs, num_gaussians)
     
-            gm_nll = -torch.logsumexp(gaussian_ll + logweights.squeeze(-1) + 1e-9, dim=-1)  # (bs, )
+            gm_nll = -torch.logsumexp(gaussian_ll + logweights.squeeze(-1), dim=-1)  # (bs, )
             return gm_nll
         else:
             """
@@ -988,7 +988,7 @@ class VRF(RectifiedFlow):
         )
         
         loss_kl = 0.5 * torch.mean(torch.norm(latent, p=2, dim=-1) ** 2)
-        loss += loss_kl
+        loss += 10 * loss_kl
         
         return loss
         

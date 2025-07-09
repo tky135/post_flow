@@ -1,0 +1,66 @@
+
+
+data_shape: [3, 32, 32]
+# [EightGaussians2D, Moon, Gaussian]
+data:
+  source: 
+    type:
+      datasets.distribution.Gaussian
+    args:
+      data_shape: ${data_shape}
+  target:
+    type:
+      datasets.distribution.Cifar10
+
+  batch_size: 32
+  light_weight: False
+  num_workers: 32
+  prefetch_factor: 4
+
+    
+
+
+model:
+  method:
+    type:
+      rectified_flow.rectified_flow.GMFlow
+    args:
+      interp: "straight"
+  net:
+    type:
+      models.dit_gmflow.GMDiTTransformer2DModel
+    # args:
+    #   num_gaussians: 8
+    #   logstd_inner_dim: 1024
+    #   gm_num_logstd_layers: 2
+    #   num_attention_heads: 16
+    #   attention_head_dim: 72
+    #   in_channels: 3
+    #   num_layers: 28
+    #   sample_size: 32  # 256
+    #   torch_dtype: float32
+    #   checkpointing: true
+    args:
+      num_gaussians: 4          # Reduced from 8 (fewer mixture components)
+      logstd_inner_dim: 256     # Reduced from 1024 (smaller MLP for logstd)
+      gm_num_logstd_layers: 1   # Reduced from 2 (simpler logstd network)
+      num_attention_heads: 8    # Reduced from 16 (fewer attention heads)
+      attention_head_dim: 64    # Reduced from 72 (smaller head dimension)
+      in_channels: 3            # Keep same (RGB images)
+      num_layers: 6             # Reduced from 28 (much fewer transformer layers)
+      sample_size: 32           # Keep same (already small)
+      torch_dtype: float32      # Keep same
+      checkpointing: true       # Keep same
+
+    # args:
+    #   num_gaussians: 2
+    #   logstd_inner_dim: 128
+    #   gm_num_logstd_layers: 1
+    #   num_attention_heads: 4
+    #   attention_head_dim: 32
+    #   in_channels: 3
+    #   num_layers: 3
+    #   sample_size: 16
+    #   torch_dtype: float32
+    #   checkpointing: true
+

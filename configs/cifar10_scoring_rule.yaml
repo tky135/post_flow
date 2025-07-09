@@ -12,7 +12,7 @@ data:
     type:
       datasets.distribution.Cifar10
 
-  batch_size: 4
+  batch_size: 2
   light_weight: False
   num_workers: 32
   prefetch_factor: 4
